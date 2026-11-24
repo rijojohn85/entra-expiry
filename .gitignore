@@ -1,0 +1,10 @@
+# Working files, never commit.
+# .state holds: oidc-issuer-url, app-id, fixture certs. No secrets, but still local-only.
+.state/
+
+# Build artifacts
+/entra-expiry
+dist/
+
+# Local env files
+.env
