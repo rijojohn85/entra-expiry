@@ -4,14 +4,12 @@ Copyright © 2026 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
-	"github.com/rijojohn85/entra-expiry/internal/graph"
+	"github.com/rijojohn85/entra-expiry/internal/provider"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -43,26 +41,21 @@ to quickly create a Cobra application.`,
 		slog.SetDefault(logger)
 		ctx := cmd.Context()
 		httpClient := &http.Client{Timeout: 30 * time.Second}
-		client, err := graph.NewGraphClient(ctx, "https://graph.microsoft.com/.default", httpClient)
+		provider, err := provider.NewGraphProvider(ctx, "https://graph.microsoft.com/.default", httpClient)
 		if err != nil {
 			return err
 		}
-		resp, err := client.DoRequest("https://graph.microsoft.com/v1.0/applications?$select=displayName,appId,passwordCredentials,keyCredentials&$top=1")
+		apps, err := provider.ListApplications(ctx)
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("request failed with status code %d", resp.StatusCode)
+		slog.Info("Applications retrieved", "count", len(apps))
+		for _, app := range apps {
+			slog.Info("Application", "ID", app.ID, "DisplayName", app.DisplayName, "Credentials", len(app.Credentials))
+			for _, cred := range app.Credentials {
+				slog.Info("Credential", "Type", cred.Type, "KeyID", cred.KeyID, "Name", cred.Name, "Expires", cred.Expires)
+			}
 		}
-		slog.Info("Request successful")
-		slog.Debug("Response received", "status", resp.Status)
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return err
-		}
-		slog.Debug("Response Body", "body", string(respBody))
-		fmt.Println("scan called")
 		return nil
 	},
 }
