@@ -56,6 +56,20 @@ func TestReportClassifiesCredentialStatuses(t *testing.T) {
 	}
 }
 
+func TestClassifyWindowBoundary(t *testing.T) {
+	now := time.Now()
+
+	status, rank := classify(now.AddDate(0, 0, 29), now, 30)
+	if status != "Expiring Soon" || rank != 1 {
+		t.Errorf("29 days out = (%q, %d), want (Expiring Soon, 1)", status, rank)
+	}
+	// Exactly at the boundary counts as Valid — Before is strict.
+	status, rank = classify(now.Add(time.Duration(30) * 24 * time.Hour), now, 30)
+	if status != "Valid" || rank != 2 {
+		t.Errorf("exactly at boundary = (%q, %d), want (Valid, 2)", status, rank)
+	}
+}
+
 func TestReportRespectsDaysWindow(t *testing.T) {
 	now := time.Now()
 	apps := []provider.Application{

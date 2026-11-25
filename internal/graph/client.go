@@ -35,15 +35,7 @@ func NewGraphClient(scopeURL string, credential azcore.TokenCredential, httpClie
 	}
 }
 
-func (c *GraphClient) DoInitialRequest(ctx context.Context, url string) (*http.Response, error) {
-	req, err := c.CreateGetRequest(ctx, url)
-	if err != nil {
-		return nil, err
-	}
-	return c.DoRequest(req)
-}
-
-func (c *GraphClient) CreateGetRequest(ctx context.Context, url string) (*http.Request, error) {
+func (c *GraphClient) createGetRequest(ctx context.Context, url string) (*http.Request, error) {
 	token, err := c.credential.GetToken(ctx, policy.TokenRequestOptions{
 		Scopes: []string{c.scopeURL},
 	})
@@ -60,16 +52,18 @@ func (c *GraphClient) CreateGetRequest(ctx context.Context, url string) (*http.R
 	return req, nil
 }
 
-func (c *GraphClient) DoRequest(req *http.Request) (*http.Response, error) {
+func (c *GraphClient) doRequest(req *http.Request) (*http.Response, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		// Optionally, read the response body for more detailed error information
+		// Read the response body for the Graph error details, and keep the
+		// URL in the error so logs say *which* endpoint failed.
 		body := readResponseBody(resp)
 		retryAfter := getRetryAfter(resp)
-		return nil, NewAPIError(resp.StatusCode, fmt.Errorf("request failed with status: %s, body: %s", resp.Status, body), retryAfter)
+		return nil, NewAPIError(resp.StatusCode, req.URL.String(),
+			fmt.Errorf("request failed with status: %s, body: %s", resp.Status, body), retryAfter)
 	}
 	return resp, nil
 }
@@ -108,16 +102,16 @@ func (c *GraphClient) DoRequestWithPaging(ctx context.Context, url string) ([]Gr
 	return apps, nil
 }
 
-// fetchPage GETs one page of results and decodes it. The response body is
+// getPage GETs one page of results and decodes it. The response body is
 // always closed before returning — defers inside a paging loop would keep
 // every page's connection open until the outer function returns.
 func (c *GraphClient) getPage(ctx context.Context, url string) (ApplicationsPage, error) {
 	var page ApplicationsPage
-	req, err := c.CreateGetRequest(ctx, url)
+	req, err := c.createGetRequest(ctx, url)
 	if err != nil {
 		return page, err
 	}
-	res, err := c.DoRequest(req)
+	res, err := c.doRequest(req)
 	if err != nil {
 		return page, err
 	}
@@ -128,6 +122,8 @@ func (c *GraphClient) getPage(ctx context.Context, url string) (ApplicationsPage
 	return page, nil
 }
 
+// fetchPage wraps getPage in the retry policy: transient failures
+// (429 / 5xx) are retried with backoff, honoring the server's Retry-After.
 func (c *GraphClient) fetchPage(ctx context.Context, url string) (ApplicationsPage, error) {
 	return withRetry(ctx, c.retryPolicy, func() (ApplicationsPage, error) {
 		return c.getPage(ctx, url)

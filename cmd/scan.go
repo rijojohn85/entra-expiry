@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,9 @@ expired or expires within the --days window, and prints a report.
 Requires the Application.Read.All application permission and an
 authenticated default credential (az login locally).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Flags parsed by here — a usage dump is only useful for flag
+		// mistakes, not for runtime failures below.
+		cmd.SilenceUsage = true
 		ctx := cmd.Context()
 		httpClient := &http.Client{Timeout: 30 * time.Second}
 		p, err := provider.NewGraphProvider("https://graph.microsoft.com/.default", httpClient)
@@ -38,24 +42,23 @@ func init() {
 	rootCmd.AddCommand(scanCmd)
 }
 
+// appProvider is the consumer-side interface (see
+// go.dev/wiki/CodeReviewComments#interfaces): scanRun depends only on this,
+// tests use a fake, internal/provider stays concrete.
 type appProvider interface {
 	ListApplications(ctx context.Context) ([]provider.Application, error)
 }
-type Output interface {
-	Generate()
-}
+
+var _ appProvider = (*provider.GraphProvider)(nil)
 
 func scanRun(ctx context.Context, p appProvider, w io.Writer, days int) error {
 	apps, err := p.ListApplications(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("scan: %w", err)
 	}
-	slog.Debug("Credential Scan successful", "applications", len(apps))
-	reportOutput := report.NewReport(apps, days, w)
-	outputTable(reportOutput)
+	slog.Debug("credential scan successful", "applications", len(apps))
+	if err := report.NewReport(apps, days, w).Generate(); err != nil {
+		return fmt.Errorf("scan: %w", err)
+	}
 	return nil
-}
-
-func outputTable(report Output) {
-	report.Generate()
 }

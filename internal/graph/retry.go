@@ -21,7 +21,7 @@ func retryHint(err error) (time.Duration, bool) {
 		return time.Duration(0), false
 	}
 	if apiError.Status == http.StatusTooManyRequests || apiError.Status >= 500 {
-		// Here you could parse the Retry-After header if available
+		// Retry-After (seconds) is parsed in getRetryAfter and carried on the APIError.
 		return apiError.RetryAfter, true
 	}
 	return time.Duration(0), false

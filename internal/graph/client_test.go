@@ -76,11 +76,11 @@ func TestDoRequestNonOKReturnsAPIError(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	req, err := c.CreateGetRequest(context.Background(), srv.URL)
+	req, err := c.createGetRequest(context.Background(), srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.DoRequest(req)
+	_, err = c.doRequest(req)
 
 	var apiErr APIError
 	if !errors.As(err, &apiErr) {
@@ -100,7 +100,7 @@ func TestDoRequestNonOKReturnsAPIError(t *testing.T) {
 
 func TestAPIErrorUnwrap(t *testing.T) {
 	inner := fmt.Errorf("request failed with status: 429")
-	apiErr := NewAPIError(429, inner, 0)
+	apiErr := NewAPIError(429, "https://graph.microsoft.com/v1.0/applications", inner, 0)
 
 	// Unwrap must expose the inner error through the chain
 	if !errors.Is(apiErr, inner) {

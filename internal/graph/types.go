@@ -7,20 +7,22 @@ import (
 
 type APIError struct {
 	Status     int
+	URL        string // endpoint that failed
 	Err        error
 	RetryAfter time.Duration
 }
 
-func NewAPIError(status int, err error, retryAfter time.Duration) APIError {
+func NewAPIError(status int, url string, err error, retryAfter time.Duration) APIError {
 	return APIError{
 		Status:     status,
+		URL:        url,
 		Err:        err,
 		RetryAfter: retryAfter,
 	}
 }
 
 func (e APIError) Error() string {
-	return fmt.Sprintf("status: %d, error: %v", e.Status, e.Err)
+	return fmt.Sprintf("status: %d, url: %s, error: %v", e.Status, e.URL, e.Err)
 }
 func (e APIError) Unwrap() error { return e.Err }
 

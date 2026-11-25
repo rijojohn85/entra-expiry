@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -77,7 +78,9 @@ func initializeConfig(cmd *cobra.Command) error {
 		viper.SetConfigFile(cfgFile)
 	} else {
 		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
+		if err != nil {
+			return fmt.Errorf("resolve home dir: %w", err)
+		}
 		viper.AddConfigPath(".")
 		viper.AddConfigPath(home + "/.entra-expiry")
 		viper.AddConfigPath(home + "/.config/.entra-expiry")
