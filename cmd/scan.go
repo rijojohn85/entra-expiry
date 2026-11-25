@@ -1,76 +1,79 @@
-/*
-Copyright © 2026 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"time"
 
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/rijojohn85/entra-expiry/internal/provider"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
 
-// scanCmd represents the scan command
 var scanCmd = &cobra.Command{
 	Use:   "scan",
-	Short: "A brief description of your command",
-	Long: `A longer description that spans multiple lines and likely contains examples
-and usage of using your command. For example:
+	Short: "Scan the tenant for expired or expiring credentials",
+	Long: `Runs a single scan against your Entra ID tenant via the Microsoft Graph
+API, listing every app registration secret and certificate that has
+expired or expires within the --days window, and prints a report.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
+Requires the Application.Read.All application permission and an
+authenticated default credential (az login locally).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		logLevel := viper.GetString("loglevel")
-		level := slog.LevelInfo
-		switch logLevel {
-		case "debug":
-			level = slog.LevelDebug
-		case "warn":
-			level = slog.LevelWarn
-		case "error":
-			level = slog.LevelError
-		}
-		logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: level,
-		}))
-		slog.SetDefault(logger)
 		ctx := cmd.Context()
 		httpClient := &http.Client{Timeout: 30 * time.Second}
-		provider, err := provider.NewGraphProvider(ctx, "https://graph.microsoft.com/.default", httpClient)
+		p, err := provider.NewGraphProvider("https://graph.microsoft.com/.default", httpClient)
 		if err != nil {
 			return err
 		}
-		apps, err := provider.ListApplications(ctx)
-		if err != nil {
-			return err
-		}
-		slog.Info("Applications retrieved", "count", len(apps))
-		for _, app := range apps {
-			slog.Info("Application", "ID", app.ID, "DisplayName", app.DisplayName, "Credentials", len(app.Credentials))
-			for _, cred := range app.Credentials {
-				slog.Info("Credential", "Type", cred.Type, "KeyID", cred.KeyID, "Name", cred.Name, "Expires", cred.Expires)
-			}
-		}
-		return nil
+		return scanRun(ctx, p, os.Stdout, viper.GetInt("days"))
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(scanCmd)
+}
 
-	// Here you will define your flags and configuration settings.
+type appProvider interface {
+	ListApplications(ctx context.Context) ([]provider.Application, error)
+}
 
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// scanCmd.PersistentFlags().String("foo", "", "A help for foo")
+func scanRun(ctx context.Context, p appProvider, w io.Writer, days int) error {
+	apps, err := p.ListApplications(ctx)
+	if err != nil {
+		return err
+	}
+	slog.Debug("Credential Scan successful", "applications", len(apps))
+	outputTable(apps, w, days)
+	return nil
+}
 
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// scanCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
-	scanCmd.Flags().String("loglevel", "info", "log level (debug, info, warn, error)")
+func outputTable(apps []provider.Application, w io.Writer, days int) {
+	t := table.NewWriter()
+
+	t.AppendHeader(table.Row{"AppName", "Cred Kind", "Name", "Expires", "IN(days)", "STATUS"})
+	now := time.Now()
+	for _, app := range apps {
+		for _, cred := range app.Credentials {
+			var status string
+			switch {
+			case cred.Expires.Before(now):
+				status = "Expired"
+			case cred.Expires.Before(now.Add(time.Duration(days) * 24 * time.Hour)):
+				status = "Expiring Soon"
+			default:
+				status = "Valid"
+			}
+			in := int(cred.Expires.Sub(now).Hours() / 24)
+			kind := cred.Type.String()
+			t.AppendRow(table.Row{app.DisplayName, kind, cred.Name, cred.Expires, in, status})
+			t.AppendSeparator()
+		}
+	}
+	fmt.Fprintln(w, t.Render())
 }

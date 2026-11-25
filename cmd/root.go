@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"errors"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -8,21 +10,28 @@ import (
 	"github.com/spf13/viper"
 )
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "entra-expiry",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
+	Short: "Find Entra ID app registration secrets and certificates that are expired or expiring",
+	Long: `entra-expiry scans the app registrations in your own Entra ID tenant
+and reports every client secret and certificate credential that has
+already expired or expires within a configurable window.
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+Credentials are read as expiry metadata only through the Microsoft Graph
+API — secret values are never fetched or stored.
+
+Commands:
+  scan    run one scan and print a report
+  serve   run as a monitored service, rescanning on an interval
+
+Authentication uses the Azure default credential chain: az login
+credentials locally, workload identity when running in AKS.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		return initializeConfig(cmd)
+		if err := initializeConfig(cmd); err != nil {
+			return err
+		}
+		setupLogger()
+		return nil
 	},
 }
 
@@ -36,17 +45,28 @@ func Execute() {
 		os.Exit(1)
 	}
 }
+func setupLogger() {
+	level := slog.LevelInfo
+	logLevel := viper.GetString("loglevel")
+
+	switch logLevel {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: level,
+	}))
+	slog.SetDefault(logger)
+}
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.entra-expiry.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.entra-expiry.yaml)")
+	rootCmd.PersistentFlags().String("loglevel", "info", "log level (debug, info, warn, error)")
+	rootCmd.PersistentFlags().Int("days", 30, "number of days to check for expiring credentials")
 }
 
 func initializeConfig(cmd *cobra.Command) error {
@@ -65,7 +85,11 @@ func initializeConfig(cmd *cobra.Command) error {
 		viper.SetConfigType("yaml")
 	}
 	if err := viper.ReadInConfig(); err != nil {
-		return err
+		var nf viper.ConfigFileNotFoundError
+		if !errors.As(err, &nf) {
+			return err // real problem (bad YAML), propagate
+		}
+		// no config file: fine, flags/env are enough
 	}
 	err := viper.BindPFlags(cmd.Flags())
 	return err

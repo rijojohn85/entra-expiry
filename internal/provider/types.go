@@ -4,6 +4,17 @@ import "time"
 
 type CredentialType int
 
+func (ct CredentialType) String() string {
+	switch ct {
+	case Secret:
+		return "Secret"
+	case Cert:
+		return "Cert"
+	default:
+		return "Unknown"
+	}
+}
+
 const (
 	Secret CredentialType = iota
 	Cert

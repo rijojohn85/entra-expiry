@@ -3,39 +3,36 @@ package graph
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
+	"fmt"
+	"io"
 	"net/http"
+	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 )
 
 type GraphClient struct {
-	scopeURL   string
-	credential *azidentity.DefaultAzureCredential
-	token      string
-	httpClient *http.Client
+	scopeURL    string
+	credential  azcore.TokenCredential
+	token       string
+	httpClient  *http.Client
+	retryPolicy RetryPolicy
 }
 
-func NewGraphClient(ctx context.Context, baseURL string, httpClient *http.Client) (*GraphClient, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
-	if err != nil {
-		return nil, err
-	}
-	token, err := cred.GetToken(ctx, policy.TokenRequestOptions{
-		Scopes: []string{baseURL},
-	})
-	if err != nil {
-		slog.Error("Failed to get token", "error", err)
-		return nil, err
-	}
-	slog.Debug("Successfully obtained Azure credential and token")
+// NewGraphClient builds a client for the Microsoft Graph API.
+// The credential is injected so callers (and tests) control authentication.
+func NewGraphClient(scopeURL string, credential azcore.TokenCredential, httpClient *http.Client) *GraphClient {
 	return &GraphClient{
-		scopeURL:   baseURL,
-		credential: cred,
-		token:      token.Token,
+		scopeURL:   scopeURL,
+		credential: credential,
 		httpClient: httpClient,
-	}, nil
+		retryPolicy: RetryPolicy{
+			MaxRetries: 3,
+			BaseDelay:  1 * time.Second,
+			MaxDelay:   10 * time.Second,
+		},
+	}
 }
 
 func (c *GraphClient) DoInitialRequest(ctx context.Context, url string) (*http.Response, error) {
@@ -47,6 +44,13 @@ func (c *GraphClient) DoInitialRequest(ctx context.Context, url string) (*http.R
 }
 
 func (c *GraphClient) CreateGetRequest(ctx context.Context, url string) (*http.Request, error) {
+	token, err := c.credential.GetToken(ctx, policy.TokenRequestOptions{
+		Scopes: []string{c.scopeURL},
+	})
+	if err != nil {
+		return nil, err
+	}
+	c.token = token.Token
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -57,38 +61,75 @@ func (c *GraphClient) CreateGetRequest(ctx context.Context, url string) (*http.R
 }
 
 func (c *GraphClient) DoRequest(req *http.Request) (*http.Response, error) {
-	return c.httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Optionally, read the response body for more detailed error information
+		body := readResponseBody(resp)
+		retryAfter := getRetryAfter(resp)
+		return nil, NewAPIError(resp.StatusCode, fmt.Errorf("request failed with status: %s, body: %s", resp.Status, body), retryAfter)
+	}
+	return resp, nil
+}
+
+func readResponseBody(resp *http.Response) string {
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body)
+}
+
+func getRetryAfter(resp *http.Response) time.Duration {
+	retryAfter := time.Duration(0)
+	if resp.Header.Get("Retry-After") != "" {
+		if ra, err := time.ParseDuration(resp.Header.Get("Retry-After") + "s"); err == nil {
+			retryAfter = ra
+		}
+	}
+	return retryAfter
 }
 
 func (c *GraphClient) DoRequestWithPaging(ctx context.Context, url string) ([]GraphApplication, error) {
 	apps := []GraphApplication{}
-	res, err := c.DoInitialRequest(ctx, url)
+	page, err := c.fetchPage(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	var appResponse ApplicationsPage
-	err = json.NewDecoder(res.Body).Decode(&appResponse)
-	if err != nil {
-		return nil, err
-	}
-	res.Body.Close()
-	apps = append(apps, appResponse.Value...)
-	for appResponse.NextLink != "" {
-		req, err := c.CreateGetRequest(ctx, appResponse.NextLink)
+	apps = append(apps, page.Value...)
+	for page.NextLink != "" {
+		page, err = c.fetchPage(ctx, page.NextLink)
 		if err != nil {
 			return nil, err
 		}
-		res, err = c.DoRequest(req)
-		if err != nil {
-			return nil, err
-		}
-		err = json.NewDecoder(res.Body).Decode(&appResponse)
-		if err != nil {
-			return nil, err
-		}
-		apps = append(apps, appResponse.Value...)
-		res.Body.Close()
+		apps = append(apps, page.Value...)
 	}
 
 	return apps, nil
+}
+
+// fetchPage GETs one page of results and decodes it. The response body is
+// always closed before returning — defers inside a paging loop would keep
+// every page's connection open until the outer function returns.
+func (c *GraphClient) getPage(ctx context.Context, url string) (ApplicationsPage, error) {
+	var page ApplicationsPage
+	req, err := c.CreateGetRequest(ctx, url)
+	if err != nil {
+		return page, err
+	}
+	res, err := c.DoRequest(req)
+	if err != nil {
+		return page, err
+	}
+	defer res.Body.Close()
+	if err := json.NewDecoder(res.Body).Decode(&page); err != nil {
+		return page, fmt.Errorf("decode page %q: %w", url, err)
+	}
+	return page, nil
+}
+
+func (c *GraphClient) fetchPage(ctx context.Context, url string) (ApplicationsPage, error) {
+	return withRetry(ctx, c.retryPolicy, func() (ApplicationsPage, error) {
+		return c.getPage(ctx, url)
+	})
 }

@@ -1,6 +1,28 @@
 package graph
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
+
+type APIError struct {
+	Status     int
+	Err        error
+	RetryAfter time.Duration
+}
+
+func NewAPIError(status int, err error, retryAfter time.Duration) APIError {
+	return APIError{
+		Status:     status,
+		Err:        err,
+		RetryAfter: retryAfter,
+	}
+}
+
+func (e APIError) Error() string {
+	return fmt.Sprintf("status: %d, error: %v", e.Status, e.Err)
+}
+func (e APIError) Unwrap() error { return e.Err }
 
 type ApplicationsPage struct {
 	Value    []GraphApplication `json:"value"`
