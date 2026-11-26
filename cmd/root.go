@@ -58,7 +58,9 @@ func setupLogger() {
 	case "error":
 		level = slog.LevelError
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	// stderr: stdout must stay clean — it carries the report payload
+	// (table or JSON) that scripts pipe into other tools.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 	}))
 	slog.SetDefault(logger)

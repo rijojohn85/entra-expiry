@@ -11,18 +11,14 @@ import (
 	"github.com/rijojohn85/entra-expiry/internal/provider"
 )
 
-// Report holds the rendered table plus the counts behind it, so future
-// consumers (--json, serve metrics) can read the numbers without
-// re-scanning.
-type Report struct {
-	Table  table.Writer
-	Writer io.Writer
-
-	Expired    int
-	Expiring   int
-	Valid      int
-	TotalApps  int // all apps scanned, including ones with no credentials
-	TotalCreds int // rows actually printed
+// summary is the count data both renderers share — and, thanks to the
+// json tags, the top-level shape of the --json payload.
+type summary struct {
+	Scanned  int `json:"scanned"` // apps looked at, including ones with no credentials
+	Total    int `json:"total"`   // credentials found
+	Expired  int `json:"expired"`
+	Expiring int `json:"expiring"`
+	Valid    int `json:"valid"`
 }
 
 type row struct {
@@ -48,25 +44,26 @@ func classify(expires time.Time, now time.Time, days int) (status string, rank i
 	}
 }
 
-func NewReport(apps []provider.Application, days int, output io.Writer) Report {
-	writer := table.NewWriter()
-	writer.AppendHeader(table.Row{"AppName", "Cred Kind", "Name", "Expires", "IN(days)", "STATUS"})
-	now := time.Now()
-
-	r := Report{Table: writer, Writer: output, TotalApps: len(apps)}
+// build classifies every credential exactly once and sorts worst-first
+// (expired before expiring before valid, oldest first within a group).
+// Both renderers consume these rows, so the table and the JSON output
+// can never disagree.
+func build(apps []provider.Application, days int, now time.Time) ([]row, summary) {
 	var rows []row
+	var s summary
+	s.Scanned = len(apps)
 	for _, app := range apps {
 		for _, cred := range app.Credentials {
 			status, rank := classify(cred.Expires, now, days)
 			switch rank {
 			case 0:
-				r.Expired++
+				s.Expired++
 			case 1:
-				r.Expiring++
-			default:
-				r.Valid++
+				s.Expiring++
+			case 2:
+				s.Valid++
 			}
-			r.TotalCreds++
+			s.Total++
 			rows = append(rows, row{
 				app:     app.DisplayName,
 				kind:    cred.Type.String(),
@@ -78,28 +75,40 @@ func NewReport(apps []provider.Application, days int, output io.Writer) Report {
 			})
 		}
 	}
-
-	// Worst first: expired before expiring before valid, oldest first within.
 	slices.SortFunc(rows, func(a, b row) int {
 		if c := cmp.Compare(a.rank, b.rank); c != 0 {
 			return c
 		}
 		return a.expires.Compare(b.expires)
 	})
+	return rows, s
+}
+
+// Report renders the human-readable table.
+type Report struct {
+	Table  table.Writer
+	Writer io.Writer
+	summary
+}
+
+func NewReport(apps []provider.Application, days int, output io.Writer) Report {
+	writer := table.NewWriter()
+	writer.AppendHeader(table.Row{"AppName", "Cred Kind", "Name", "Expires", "IN(days)", "STATUS"})
+	rows, s := build(apps, days, time.Now())
 	for _, row := range rows {
 		writer.AppendRow(table.Row{row.app, row.kind, row.name, row.expires, row.in, row.status})
 		writer.AppendSeparator()
 	}
-	return r
+	return Report{Table: writer, Writer: output, summary: s}
 }
 
 func (r Report) Generate() error {
 	if _, err := fmt.Fprintln(r.Writer, r.Table.Render()); err != nil {
 		return fmt.Errorf("render table: %w", err)
 	}
-	summary := fmt.Sprintf("\n%d application(s) scanned, %d credential(s): %d expired, %d expiring soon, %d valid\n",
-		r.TotalApps, r.TotalCreds, r.Expired, r.Expiring, r.Valid)
-	if _, err := fmt.Fprint(r.Writer, summary); err != nil {
+	line := fmt.Sprintf("\n%d application(s) scanned, %d credential(s): %d expired, %d expiring soon, %d valid\n",
+		r.Scanned, r.Total, r.Expired, r.Expiring, r.Valid)
+	if _, err := fmt.Fprint(r.Writer, line); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 	return nil

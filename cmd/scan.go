@@ -34,12 +34,14 @@ authenticated default credential (az login locally).`,
 		if err != nil {
 			return err
 		}
+
 		return scanRun(ctx, p, os.Stdout, viper.GetInt("days"))
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(scanCmd)
+	scanCmd.Flags().Bool("json", false, "output as json")
 }
 
 // appProvider is the consumer-side interface (see
@@ -47,6 +49,12 @@ func init() {
 // tests use a fake, internal/provider stays concrete.
 type appProvider interface {
 	ListApplications(ctx context.Context) ([]provider.Application, error)
+}
+
+// reporter is the consumer-side seam between scanRun and the output
+// formats: the table report and the --json payload both Generate() here.
+type reporter interface {
+	Generate() error
 }
 
 var _ appProvider = (*provider.GraphProvider)(nil)
@@ -57,7 +65,13 @@ func scanRun(ctx context.Context, p appProvider, w io.Writer, days int) error {
 		return fmt.Errorf("scan: %w", err)
 	}
 	slog.Debug("credential scan successful", "applications", len(apps))
-	if err := report.NewReport(apps, days, w).Generate(); err != nil {
+	var rep reporter
+	if viper.GetBool("json") {
+		rep = report.NewJSONReport(apps, days, w)
+	} else {
+		rep = report.NewReport(apps, days, w)
+	}
+	if err := rep.Generate(); err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
 	return nil
