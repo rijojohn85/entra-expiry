@@ -11,9 +11,9 @@ import (
 	"github.com/rijojohn85/entra-expiry/internal/provider"
 )
 
-// summary is the count data both renderers share — and, thanks to the
+// Summary is the count data both renderers share — and, thanks to the
 // json tags, the top-level shape of the --json payload.
-type summary struct {
+type Summary struct {
 	Scanned  int `json:"scanned"` // apps looked at, including ones with no credentials
 	Total    int `json:"total"`   // credentials found
 	Expired  int `json:"expired"`
@@ -21,14 +21,13 @@ type summary struct {
 	Valid    int `json:"valid"`
 }
 
-type row struct {
-	app     string
-	kind    string
-	name    string
-	expires time.Time
-	in      int
-	status  string
-	rank    int // 0 expired < 1 expiring < 2 valid — sort key
+type Row struct {
+	App     string    `json:"app"`
+	Kind    string    `json:"kind"`
+	Name    string    `json:"name"`
+	Expires time.Time `json:"expires"`
+	In      int       `json:"days_to_expire"`
+	Status  string    `json:"status"`
 }
 
 // classify labels one credential relative to now. A credential expiring
@@ -44,13 +43,20 @@ func classify(expires time.Time, now time.Time, days int) (status string, rank i
 	}
 }
 
-// build classifies every credential exactly once and sorts worst-first
+// Build classifies every credential exactly once and sorts worst-first
 // (expired before expiring before valid, oldest first within a group).
 // Both renderers consume these rows, so the table and the JSON output
 // can never disagree.
-func build(apps []provider.Application, days int, now time.Time) ([]row, summary) {
-	var rows []row
-	var s summary
+// ranked pairs a row with its sort key while Build works. The rank never
+// escapes Build — consumers see sorted rows only.
+type ranked struct {
+	row  Row
+	rank int // 0 expired < 1 expiring < 2 valid
+}
+
+func Build(apps []provider.Application, days int, now time.Time) ([]Row, Summary) {
+	var rankedRows []ranked
+	var s Summary
 	s.Scanned = len(apps)
 	for _, app := range apps {
 		for _, cred := range app.Credentials {
@@ -64,23 +70,29 @@ func build(apps []provider.Application, days int, now time.Time) ([]row, summary
 				s.Valid++
 			}
 			s.Total++
-			rows = append(rows, row{
-				app:     app.DisplayName,
-				kind:    cred.Type.String(),
-				name:    cred.Name,
-				expires: cred.Expires,
-				in:      int(cred.Expires.Sub(now).Hours() / 24),
-				status:  status,
-				rank:    rank,
+			rankedRows = append(rankedRows, ranked{
+				row: Row{
+					App:     app.DisplayName,
+					Kind:    cred.Type.String(),
+					Name:    cred.Name,
+					Expires: cred.Expires,
+					In:      int(cred.Expires.Sub(now).Hours() / 24),
+					Status:  status,
+				},
+				rank: rank,
 			})
 		}
 	}
-	slices.SortFunc(rows, func(a, b row) int {
+	slices.SortFunc(rankedRows, func(a, b ranked) int {
 		if c := cmp.Compare(a.rank, b.rank); c != 0 {
 			return c
 		}
-		return a.expires.Compare(b.expires)
+		return a.row.Expires.Compare(b.row.Expires)
 	})
+	rows := make([]Row, 0, len(rankedRows))
+	for _, rr := range rankedRows {
+		rows = append(rows, rr.row)
+	}
 	return rows, s
 }
 
@@ -88,18 +100,18 @@ func build(apps []provider.Application, days int, now time.Time) ([]row, summary
 type Report struct {
 	Table  table.Writer
 	Writer io.Writer
-	summary
+	Summary
 }
 
 func NewReport(apps []provider.Application, days int, output io.Writer) Report {
 	writer := table.NewWriter()
 	writer.AppendHeader(table.Row{"AppName", "Cred Kind", "Name", "Expires", "IN(days)", "STATUS"})
-	rows, s := build(apps, days, time.Now())
+	rows, s := Build(apps, days, time.Now())
 	for _, row := range rows {
-		writer.AppendRow(table.Row{row.app, row.kind, row.name, row.expires, row.in, row.status})
+		writer.AppendRow(table.Row{row.App, row.Kind, row.Name, row.Expires, row.In, row.Status})
 		writer.AppendSeparator()
 	}
-	return Report{Table: writer, Writer: output, summary: s}
+	return Report{Table: writer, Writer: output, Summary: s}
 }
 
 func (r Report) Generate() error {

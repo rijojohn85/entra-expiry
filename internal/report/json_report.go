@@ -9,41 +9,18 @@ import (
 	"github.com/rijojohn85/entra-expiry/internal/provider"
 )
 
-// cred is one credential in the --json payload. The fields are exported
-// so encoding/json can see them; time.Time marshals as RFC3339
-// ("2026-11-24T05:27:13Z"), the format parsers and monitoring systems expect.
-type cred struct {
-	App          string    `json:"app"`
-	Kind         string    `json:"kind"`
-	Name         string    `json:"name"`
-	Expires      time.Time `json:"expires"`
-	Status       string    `json:"status"`
-	DaysToExpire int       `json:"days_to_expire"`
-}
-
-// JSONReport renders the machine-readable payload. The embedded summary
-// supplies the top-level counts and their json tags.
+// JSONReport renders the machine-readable payload. The embedded Summary
+// supplies the top-level counts and their json tags; the credential rows
+// are the same sorted Rows the table consumes.
 type JSONReport struct {
-	summary
-	Credentials []cred `json:"credentials"`
+	Summary
+	Credentials []Row `json:"credentials"`
 	writer      io.Writer
 }
 
 func NewJSONReport(apps []provider.Application, days int, w io.Writer) *JSONReport {
-	rows, s := build(apps, days, time.Now())
-	jr := &JSONReport{summary: s, writer: w}
-	jr.Credentials = make([]cred, 0, len(rows))
-	for _, row := range rows {
-		jr.Credentials = append(jr.Credentials, cred{
-			App:          row.app,
-			Kind:         row.kind,
-			Name:         row.name,
-			Expires:      row.expires,
-			Status:       row.status,
-			DaysToExpire: row.in,
-		})
-	}
-	return jr
+	rows, s := Build(apps, days, time.Now())
+	return &JSONReport{Summary: s, Credentials: rows, writer: w}
 }
 
 func (r *JSONReport) Generate() error {

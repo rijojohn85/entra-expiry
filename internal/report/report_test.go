@@ -65,7 +65,7 @@ func TestClassifyWindowBoundary(t *testing.T) {
 		t.Errorf("29 days out = (%q, %d), want (Expiring Soon, 1)", status, rank)
 	}
 	// Exactly at the boundary counts as Valid — Before is strict.
-	status, rank = classify(now.Add(time.Duration(30) * 24 * time.Hour), now, 30)
+	status, rank = classify(now.Add(time.Duration(30)*24*time.Hour), now, 30)
 	if status != "Valid" || rank != 2 {
 		t.Errorf("exactly at boundary = (%q, %d), want (Valid, 2)", status, rank)
 	}
@@ -86,15 +86,15 @@ func TestBuildClassifiesCountsAndSorts(t *testing.T) {
 		{ID: "a4", DisplayName: "empty-app"},
 	}
 
-	rows, s := build(apps, 30, now)
+	rows, s := Build(apps, 30, now)
 
 	if s.Scanned != 4 || s.Total != 3 || s.Expired != 1 || s.Expiring != 1 || s.Valid != 1 {
 		t.Errorf("summary = %+v, want scanned 4, total 3, 1 expired / 1 expiring / 1 valid", s)
 	}
 	wantOrder := []string{"old-cert", "soon-secret", "healthy-secret"}
 	for i, want := range wantOrder {
-		if rows[i].name != want {
-			t.Errorf("row %d = %q, want %q (worst-first order)", i, rows[i].name, want)
+		if rows[i].Name != want {
+			t.Errorf("row %d = %q, want %q (worst-first order)", i, rows[i].Name, want)
 		}
 	}
 }

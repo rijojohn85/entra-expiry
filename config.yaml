@@ -1,3 +1,4 @@
 port: 8081
 loglevel: debug
 days: 20
+interval: 3600

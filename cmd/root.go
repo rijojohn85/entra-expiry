@@ -70,6 +70,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.entra-expiry.yaml)")
 	rootCmd.PersistentFlags().String("loglevel", "info", "log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().Int("days", 30, "number of days to check for expiring credentials")
+	rootCmd.PersistentFlags().Int("interval", 3600, "rescan interval in seconds (serve)")
 }
 
 func initializeConfig(cmd *cobra.Command) error {
